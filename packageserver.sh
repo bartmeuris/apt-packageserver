@@ -14,25 +14,30 @@
 #############################################################################
 
 # Incoming dir
-INCOMINGDIR=/vagrant
+INCOMINGDIR="${HOME}/apt-incoming"
 
 # Archive dir. If not defined, the files are removed - has to be writable by the user!
-ARCHDIR=/vagrant/archive
+ARCHDIR="${INCOMINGDIR}/archive"
 
-# The repository root directory (browsable using a web-server)
-TARGETDIR=/var/www/apt
+# The repository root directory (browsable using a web-server, writable by package generation user)
+TARGETDIR="${HOME}/apt"
 
 # Debian repository 
-DEB_ORIGIN=packages.intoit.be
-DEB_EMAIL=packages@intoit.be
-DEB_LABEL=packages.intoit.be
-DEB_DESCRIPTION="intoit internal packages server"
+DEB_ORIGIN="Origin name"
+DEB_EMAIL="packages@packageserver.com"
+DEB_LABEL="samplelabel"
+DEB_DESCRIPTION="test packages server"
 
 # List of all repositories you want to support
-DEB_DISTRIBS=precise
+#DEB_DISTRIBS="precise futuredistrib"
+DEB_DISTRIBS=
+
 # List of all architectures you want to support
-DEB_ARCHS="amd64 i386"
-DEB_COMPONENTS="main"
+#DEB_ARCHS="amd64 i386"
+DEB_ARCHS=""
+
+#DEB_COMPONENTS="main"
+DEB_COMPONENTS=
 
 # Optional GPG options
 GPG_KEYLEN=2048
@@ -43,11 +48,21 @@ GENERATE_KEY=
 # Signing is mandatory by default. Clear if not needed
 MANDATORY_SIGN=1
 #############################################################################
+# Load optional config files
+[ -f "/etc/default/packageserver" ] && . /etc/default/packageserver
+[ -f "${HOME}/.packageserver" ] && . ${HOME}/.packageserver
+#############################################################################
 
 CMD=$0
 function showhelp
 {
 	echo "Usage $CMD <options>"
+	cat <<EOF
+	-g|--generategpg:
+		Generate a GPG key for this server if required and exit.
+	-h|--help
+		Show this message and exit.
+EOF
 }
 
 function info
@@ -74,10 +89,6 @@ function abort
 	exit 0
 }
 
-# Load optional config files
-[ -f "/etc/default/packagebuilder" ] && . /etc/default/packagebuilder
-[ -f "~/.packagebuilder" ] && . ~/.packagebuilder
-
 while [ 1 ]; do
 	if [ "`echo $1 | sed -e "s/^-.*/OK/g"`" != "OK" ]; then
 		break;
@@ -96,7 +107,18 @@ while [ 1 ]; do
 	esac
 done
 
-#abort testing...
+#############################################################################
+# Basic check
+if [ ! -d "$TARGETDIR" ]; then
+	mkdir -p "$TARGETDIR/$SUBDIR" || abort "Could not create target directory '${TARGETDIR}' !"
+fi
+[ ! -w "${TARGETDIR}" ] && abort "Target directory '${TARGETDIR}' is not writable for current user!"
+TSUBDIRS="conf dists incoming indices logs pool project project tmp"
+for SUBDIR in $TSUBDIRS; do
+	[ ! -d "$TARGETDIR/$SUBDIR" ] && mkdir -p "$TARGETDIR/$SUBDIR"
+done
+
+#############################################################################
 
 # The ASCII pubkey is exported here with the name "${DEB_ORIGIN}.gpg.key"
 [ -z "${KEYPATH}" ] && KEYPATH="${TARGETDIR}/conf"
@@ -104,7 +126,7 @@ done
 #########################################
 ## Install required packages if needed
 
-sudo -n ls / 2&>1 > /dev/null
+sudo -n ls / 2>&1 > /dev/null
 NO_SUDO=$?
 
 INSTPKG=
@@ -175,11 +197,6 @@ elif [ -n "${MANDATORY_SIGN}" ]; then
 else
 	warn "Signing key not available -- package signing disabled, use -g to generate GPG key"
 fi
-
-TSUBDIRS="conf dists incoming indices logs pool project project tmp"
-for SUBDIR in $TSUBDIRS; do
-	[ ! -d "$TARGETDIR/$SUBDIR" ] && mkdir -p "$TARGETDIR/$SUBDIR"
-done
 
 for DEB_DIST in $DEB_DISTRIBS; do
 	info "## Processing distribution ${DEB_DIST}"

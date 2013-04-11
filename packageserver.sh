@@ -258,12 +258,17 @@ if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] |
 fi
 
 if [ ! -d "$TARGETDIR" ]; then
-	mkdir -p "$TARGETDIR/$SUBDIR" || abort "Could not create target directory '${TARGETDIR}' !"
+	mkdir -p "$TARGETDIR/" || abort "Could not create target directory '${TARGETDIR}'!"
+fi
+if [ ! -d "${INCOMINGDIR}" ]; then
+	mkdir -p "${INCOMINGDIR}/" || abort "Could not create incoming directory '${INCOMINGDIR}'!"
 fi
 [ ! -w "${TARGETDIR}" ] && abort "Target directory '${TARGETDIR}' is not writable for current user!"
 TSUBDIRS="conf dists incoming indices logs pool project project tmp"
 for SUBDIR in $TSUBDIRS; do
-	[ ! -d "$TARGETDIR/$SUBDIR" ] && mkdir -p "$TARGETDIR/$SUBDIR"
+	if [ ! -d "$TARGETDIR/$SUBDIR" ]; then
+		mkdir -p "${TARGETDIR}/${SUBDIR}/" || abort "Could not create directory '${TARGETDIR}/${SUBDIR}'!"
+	fi
 done
 
 #############################################################################
@@ -344,18 +349,29 @@ fi
 
 #############################################################################
 ## Function to add a .deb file to a specific repository
+add_deb_to_repo_status=
 function add_deb_to_repo
 {
+	add_deb_to_repo_status=
 	DEB_DIST="$1"
 	DEBFILE="$2"
 	if [ ! -f "$DEBFILE" ]; then
-		abort "Attempting to add non-existant $DEBFILE"
+		warn "Attempting to add non-existant $DEBFILE - ignoring"
+		add_deb_to_repo_status=0
+		return
+	fi
+	if [ -n "`lsof ${DEBFILE}`" ]; then
+		warn "File ${DEBFILE} still open by other processes - skipping..."
+		add_deb_to_repo_status=0
+		return
 	fi
 	FN=`basename "${DEBFILE}"`
 	FP="${DEBFILE}"
 	dpkg --info "${FP}" 2>&1 >/dev/null
 	if [ $? -ne 0 ]; then
-		abort "File '${FP}' is not a valid debian package"
+		error "File '${FP}' is not a valid debian package"
+		add_deb_to_repo_status=1
+		return
 	fi
 	PKG_NAME=`dpkg --info "${FP}" 2>/dev/null | grep "^ Package: " | sed -e "s/^.*: \(.*\)$/\1/"`
 	PKG_VER=`dpkg --info "${FP}" 2>/dev/null | grep "^ Version: " | sed -e "s/^.*: \(.*\)$/\1/"`
@@ -366,9 +382,14 @@ function add_deb_to_repo
 		if [ -n "$REMOVE_IFEXISTS" ]; then
 			warn "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - removing..."
 			reprepro -b ${TARGETDIR}/ remove "${DEB_DIST}" "${PKG_NAME}" 2>&1 > /dev/null
-			[ $? -ne 0 ] && abort "Could not remove package ${PKG_NAME}"
+			if [ $? -ne 0 ]; then
+				error "Could not remove package ${PKG_NAME}"
+				add_deb_to_repo_status=3
+				return
+			fi
 		else
 			error "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - skipping..."
+			add_deb_to_repo_status=2
 			return
 		fi
 	fi
@@ -379,12 +400,19 @@ function add_deb_to_repo
 		FP="/tmp/$FN"
 		cp "${DEBFILE}" "${FP}"
 		dpkg-sig -m "${DEB_KEYNAME}" -s builder -g "${GPG_OPTS}" "${FP}" 2>&1 > /dev/null
-		[ $? -ne 0 ] && abort "Could not sign package ${FN}"
+		if [ $? -ne 0 ]; then
+			error "Could not sign package ${FN}"
+			add_deb_to_repo_status=3
+			return
+		fi
 	fi
 	# Add the file to the repository
 	info "   Adding..."
 	reprepro -b ${TARGETDIR} includedeb "${DEB_DIST}" "${FP}" 2>&1 > /dev/null
-	[ $? -ne 0 ] && abort "   Could not add package ${FN} to ${DEB_DIST} distribution!"
+	if [ $? -ne 0 ]; then
+		error "   Could not add package ${FN} to ${DEB_DIST} distribution!"
+		add_deb_to_repo_status=3
+	fi
 	
 	# Delete temporary signed file 
 	[ "${FP}" != "${DEBFILE}" ] && rm "${FP}"
@@ -432,6 +460,7 @@ EOF
 	reprepro -b "${TARGETDIR}" check "${DEB_DIST}"
 done
 
+RETVAL=0
 
 if [ -n "$DISTSEL" ]; then
 	#########################################################################
@@ -440,10 +469,12 @@ if [ -n "$DISTSEL" ]; then
 	if [ "$DISTSEL" == "all" ]; then
 		for DEB_DIST in $DEB_DISTRIBS; do
 			add_deb_to_repo "${DEB_DIST}" "$1"
+			[ -n "$add_deb_to_repo_status" ] && RETVAL=$add_deb_to_repo_status
 		done
 	else
 		while [ -n "$1" ]; do
 			add_deb_to_repo "${DISTSEL}" "$1"
+			[ -n "$add_deb_to_repo_status" ] && RETVAL=$add_deb_to_repo_status
 		done
 	fi
 else
@@ -459,17 +490,33 @@ else
 	for DEB_DIST in $DEB_DISTRIBS; do
 		ls ${INCOMINGDIR}/${DEB_DIST}/*.deb 2>/dev/null | while read DEBFILE; do
 			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
-			archive_debfile "${DEB_DIST}" "${DEBFILE}"
+			if [ -n "$add_deb_to_repo_status" ]; then
+				warn "Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+				RETVAL=$add_deb_to_repo_status
+			else
+				archive_debfile "${DEB_DIST}" "${DEBFILE}"
+			fi
 		done
 	done
 
 	#########################################################################
 	## Process the "all" distributions packages
 	ls ${INCOMINGDIR}/*.deb ${INCOMINGDIR}/all/*.deb 2>/dev/null | while read DEBFILE; do
+		LERR=
 		for DEB_DIST in $DEB_DISTRIBS; do
 			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+			if [ -n "$add_deb_to_repo_status" ]; then
+				LERR=$add_deb_to_repo_status
+			else
+				archive_debfile "${DEB_DIST}" "${DEBFILE}"
+			fi
 		done
-		archive_debfile "" "${DEBFILE}"
+		if [ -n "$LERR" ]; then
+			warn "Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+			RETVAL=$LERR
+		else
+			archive_debfile "" "${DEBFILE}"
+		fi
 	done
 fi
 	
@@ -478,7 +525,10 @@ fi
 info "Cleaning up repository..."
 reprepro -b ${TARGETDIR} clearvanished
 
-
+if [ $RETVAL -ne 0 ]; then
+	warn "Errors occured while processing files!"
+fi
 #############################################################################
 info "Finished."
+exit $RETVAL
 #############################################################################

@@ -15,22 +15,33 @@ It helps with the following:
 ## Getting started for the impatient
 
 ```
-$ ./packageserver.sh -s > ~/.packageserver
-$ vim ~/.packageserver
->>>> Edit the config file with your favorite editor
-$ sudo apt-get install dpkg-sig reprepro gnupg
-$ ./packageserver.sh --generategpg
-$ 
+# Generate sample configuration file
+./packageserver.sh -s > ~/.packageserver
+
+# Edit the config file with your favorite editor
+vim ~/.packageserver
+
+# Make sure the required dependencies are installed
+sudo apt-get install dpkg-sig reprepro gnupg
+
+# Generate the initial GPG key
+./packageserver.sh --generategpg
 ```
 Now make sure your `TARGETDIR` is served by a webserver.
 
-To add packages, put them in your incoming directory, and run the `packageserver.sh` script again without any packages. They should be added automatically.
+To add packages, put them in your incoming directory, and run:
+```
+$ ./packageserver.sh
+```
+When no additional parameters are provided, the script should process your incoming directory and all `.deb` files there should be added automatically.
 
-If you manually want to specify the files on the commandline, you can do this with the following command:
+You can also manually specify the files to import on the commandline, you can do this with the following command:
 ```
 $ ./packageserver.sh precise /path/to/mypackage-1.0.deb
 ```
-Where `precise` is the distribution, or if you want to add to all distributions configured, specify `all`. This should sign the package and import it in your repository.
+Where `precise` is the distribution, or if you want to add to all distributions configured, specify `all`.
+
+When importing a package, it is automatically signed and added to the repository.
 
 ## Getting started
 

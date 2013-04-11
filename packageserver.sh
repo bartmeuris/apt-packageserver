@@ -3,50 +3,89 @@
 ## Package server script
 ##
 #############################################################################
+# References:
+# http://www.debian-administration.org/articles/286
+# http://wiki.debian.org/HowToSetupADebianRepository
+# http://wiki.debian.org/SettingUpSignedAptRepositoryWithReprepro
+# https://help.ubuntu.com/community/LocalAptGetRepository
+# http://davehall.com.au/blog/dave/2010/02/06/howto-setup-private-package-repository-reprepro-nginx
+# http://blog.jonliv.es/2011/04/26/creating-your-own-signed-apt-repository-and-debian-packages/
 #
 # To add the repository: 
-#   wget -q -O - http://localhost/apt/conf/packages@intoit.be.gpg.key | sudo apt-key add -
-#   sudo echo "deb http://localhost/apt/ precise main" > /etc/apt/sources.list.d/00-intoit.list
+#   wget -q -O - http://<url>/conf/${DEB_KEYNAME}.gpg.key | sudo apt-key add -
+#   sudo echo "deb http://<url>/ precise main" > /etc/apt/sources.list.d/00-intoit.list
 # 
 
 #############################################################################
 # Generic settings
 #############################################################################
-
 # Incoming dir
 INCOMINGDIR=
-
 # Archive dir. If not defined, the files are removed - has to be writable by the user!
 ARCHDIR=
-
 # The repository root directory (browsable using a web-server, writable by package generation user)
 TARGETDIR=
-
 # Debian repository 
 DEB_ORIGIN=
 DEB_EMAIL=
 DEB_LABEL=
 DEB_DESCRIPTION=
-
+DEB_KEYNAME=
 # List of all repositories you want to support
-#DEB_DISTRIBS="precise futuredistrib"
 DEB_DISTRIBS=
-
 # List of all architectures you want to support
 #DEB_ARCHS="amd64 i386"
 DEB_ARCHS=
-
 #DEB_COMPONENTS="main"
 DEB_COMPONENTS=
-
+# Signing is mandatory by default. Clear if not needed
+MANDATORY_SIGN=1
 # Optional GPG options
 GPG_KEYLEN=2048
 GPG_OPTS=
 
-# Don't generate key by default
-GENERATE_KEY=
-# Signing is mandatory by default. Clear if not needed
-MANDATORY_SIGN=1
+#############################################################################
+## Logger functions
+
+function log
+{
+	LEVEL="$1"
+	COLOR="$2"
+	shift 2
+	TEXT="$*"
+	# Only colorize if output is a terminal
+	DATETIME=`date +"%Y-%m-%d %H:%M:%S"`
+	if [ -t 1 ]; then
+		echo -e "\e[${COLOR}m${LEVEL}\e[00m [\e[1;30m${DATETIME}\e[00m] $TEXT"
+	else
+		echo "${LEVEL} [${DATETIME}] $TEXT"
+	fi
+}
+
+function info
+{
+	log "INFO " "0;32" "$*"
+}
+
+function warn
+{
+	log "WARN " "1;33" "$*"
+}
+
+function error
+{
+	log "ERROR" "1;31" "$*"
+}
+
+function abort
+{
+	if [ -n "$*" ]; then
+		error "$*"
+	fi
+	error "Aborting..."
+	exit 1
+}
+
 #############################################################################
 # Load optional config files
 [ -f "/etc/default/packageserver" ] && . /etc/default/packageserver
@@ -57,18 +96,34 @@ MANDATORY_SIGN=1
 CMD=$0
 function showhelp
 {
-	echo "Usage $CMD <options>"
 	cat <<EOF
+Usage $CMD [options] [ <distribution|all> <file1.deb> [file2.deb [ ... ]] ]
+	-c|--config <file>:
+		Specify a config file to load on the commandline.
+		Note that other config files are still loaded, in the following order:
+		1. /etc/default/packageserver
+		2. ${HOME}/.packageserver
+		3. The files you specify on the commandline.
 	-g|--generategpg:
 		Generate a GPG key for this server if required and exit.
-	-d|--defaultconfig:
+	-r|--remove-existing:
+		Remove a package if it already exists with the same version in the
+		repository before attempting to add.
+		WARNING: This may have unwanted side-effects! You should probably just
+	-s|--sampleconfig:
 		Generate a default configfile (sent to stdout) that can be saved to:
 			${HOME}/.packageserver
 		or
 			/etc/default/packageserver
 		Then this file will be loaded automatically.
+		         update the package version.
 	-h|--help
 		Show this message and exit.
+If no distribution is selected and no files are provided on the commandline, and
+all settings are correct, the incoming directories will be processed.
+
+Note that files provided on the commandline are NOT archived.
+
 EOF
 }
 
@@ -76,7 +131,7 @@ function gen_config
 {
 	cat <<EOF
 ## GENERATED CONFIG FILE -- ADJUST TO YOUR OWN NEEDS
-# Incoming dir
+# REQUIRED: Incoming dir
 INCOMINGDIR="\${HOME}/apt-incoming"
 
 # Archive dir. If not defined, the files are removed - has to be writable by the user!
@@ -87,14 +142,18 @@ TARGETDIR="\${HOME}/apt"
 
 # REQUIRED: Debian repository name
 DEB_ORIGIN="Your organisation name"
+
+# REQUIRED: Name of the key in the GPG ring, should not contain spaces
+DEB_KEYNAME="packages.yourorganisation"
+
 # REQUIRED: Debian repository email
 DEB_EMAIL="packages@yourorganisation.com"
 DEB_LABEL=""
 DEB_DESCRIPTION="yourorganisation package server"
 
-# REQUIRED: List of all distriburions you want to support
+# REQUIRED: List of all distributions you want to support
 #DEB_DISTRIBS="precise futuredistrib"
-DEB_DISTRIBS=
+DEB_DISTRIBS=""
 
 # REQUIRED: List of all architectures you want to support
 #DEB_ARCHS="amd64 i386"
@@ -111,39 +170,18 @@ DEB_COMPONENTS="main"
 # Please note that when a sub key is present for the 
 #MANDATORY_SIGN=
 
+info "Loaded custom configuration for \${DEB_ORIGIN}.
+
 EOF
 }
 
-#############################################################################
-## Logger functions
-function info
-{
-	echo "INFO : $*"
-}
-
-function warn
-{
-	echo "WARN : $*"
-}
-
-function error
-{
-	echo "ERROR: $*"
-}
-
-function abort
-{
-	if [ -n "$*" ]; then
-		error "$*"
-	fi
-	echo "Aborting..."
-	exit 0
-}
 
 #############################################################################
 ## Process commandline options
+REMOVE_IFEXISTS=
+GENERATE_KEY=
 while [ 1 ]; do
-	if [ "`echo $1 | sed -e "s/^-.*/OK/g"`" != "OK" ]; then
+	if [ "`echo $1 | sed -e "s/^-.*/##OK##/g"`" != "##OK##" ]; then
 		break;
 	fi
 	OPT=$1
@@ -156,9 +194,12 @@ while [ 1 ]; do
 		-g|--generategpg)
 			GENERATE_KEY=1
 			;;
-		-d|--defaultconfig)
+		-s|--sampleconfig)
 			gen_config
 			exit 0
+			;;
+		-r|--remove-existing)
+			REMOVE_IFEXISTS=1
 			;;
 		-c|--config)
 			if [ -f "$1" ]; then
@@ -173,20 +214,38 @@ while [ 1 ]; do
 done
 
 #############################################################################
+# Check for optional commandline parameters
+DISTSEL=
+if [ -n "$1" ]; then
+	if [ "$1" == "all" ] || [[ "$DEB_DISTRIBS" == *"$1"* ]]; then
+		# Known distribution provided
+		DISTSEL="$1"
+		shift 1
+		if [ -z "$1" ] || [ ! -f "$1" ]; then
+			abort "Valid distribution '$DISTSEL' selected,  but no valid files provided"
+		fi
+		info "Distribution '$1' selected for files provided on commandline."
+	else
+		abort "Unexpected commandline argument provided or unknown distribution selected"
+	fi
+fi
+
+#############################################################################
 # Basic checks
 
-if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] || [ -z "${INCOMINGDIR}" ] || [ -z "${TARGETDIR}" ] || [ -z "${DEB_ARCHS}" ] || [ -z "${DEB_COMPONENTS}" ]; then
+if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] || [ -z "${DEB_KEYNAME}" ] || [ -z "${INCOMINGDIR}" ] || [ -z "${TARGETDIR}" ] || [ -z "${DEB_ARCHS}" ] || [ -z "${DEB_COMPONENTS}" ]; then
 	echo "#############################################################################"
 	echo "## !! NO VALID/COMPLETE CONFIGURATION PRESENT:"
-	[ -z "${DEB_DISTRIBS}" ]   && echo "##     DEB_DISTRIBS configuration empty"
-	[ -z "${DEB_EMAIL}" ]      && echo "##     DEB_EMAIL configuration empty"
-	[ -z "${DEB_ORIGIN}" ]     && echo "##     DEB_ORIGIN configuration empty"
-	[ -z "${INCOMINGDIR}" ]    && echo "##     INCOMINGDIR configuration empty"
-	[ -z "${TARGETDIR}" ]      && echo "##     TARGETDIR configuration empty"
-	[ -z "${DEB_ARCHS}" ]      && echo "##     DEB_ARCHS configuration empty"
-	[ -z "${DEB_COMPONENTS}" ] && echo "##     DEB_COMPONENTS configuration empty"
+	[ -z "${DEB_DISTRIBS}" ]   && echo "##     DEB_DISTRIBS configuration not set"
+	[ -z "${DEB_EMAIL}" ]      && echo "##     DEB_EMAIL configuration not set"
+	[ -z "${DEB_ORIGIN}" ]     && echo "##     DEB_ORIGIN configuration not set"
+	[ -z "${DEB_KEYNAME}" ]    && echo "##     DEB_KEYNAME configuration not set"
+	[ -z "${INCOMINGDIR}" ]    && echo "##     INCOMINGDIR configuration not set"
+	[ -z "${TARGETDIR}" ]      && echo "##     TARGETDIR configuration not set"
+	[ -z "${DEB_ARCHS}" ]      && echo "##     DEB_ARCHS configuration not set"
+	[ -z "${DEB_COMPONENTS}" ] && echo "##     DEB_COMPONENTS configuration not set"
 	echo "##"
-	echo "## You can generate a sameple configfile with the following command:"
+	echo "## You can generate a sample configuration file with the following command:"
 	echo "##     $CMD --defaultconfig"
 	echo "## Save the output of this command this configuration file as one of these:"
 	echo "##     /etc/default/packageserver"
@@ -211,7 +270,7 @@ done
 
 #############################################################################
 
-# The ASCII pubkey is exported here with the name "${DEB_ORIGIN}.gpg.key"
+# The ASCII pubkey is exported here with the name "${DEB_KEYNAME}.gpg.key"
 [ -z "${KEYPATH}" ] && KEYPATH="${TARGETDIR}/conf"
 
 #############################################################################
@@ -227,7 +286,7 @@ fi
 #############################################################################
 ## Generate GPG key if required
 
-DEB_SIGNID=`gpg $GPG_OPTS --list-keys "${DEB_ORIGIN}" 2>/dev/null | grep "^sub" | sed -e 's/^sub.*\/\([0-9A-Za-z]*\).*$/\1/'`
+DEB_SIGNID=`gpg $GPG_OPTS --list-keys "${DEB_KEYNAME}" 2>/dev/null | grep "^sub" | sed -e 's/^sub.*\/\([0-9A-Za-z]*\).*$/\1/'`
 if [ -n "${GENERATE_KEY}" ]; then
 	if [ -z "${DEB_SIGNID}" ]; then
 		## Generate GPG key if needed
@@ -241,7 +300,7 @@ if [ -n "${GENERATE_KEY}" ]; then
 			error "  - rng-tools (using /dev/urandom is NOT secure but works for testing)"
 			error "Note that using these has security implications recarding key-strenght, so make sure you know what you're doing."
 			error ""
-			error "Another sollution is to generate a GPG key+subkey for '${DEB_ORIGIN}' on another machine and import them in your keyring manually."
+			error "Another sollution is to generate a GPG key+subkey for '${DEB_KEYNAME}' on another machine and import them in your keyring manually."
 			abort
 		fi
 		
@@ -251,9 +310,9 @@ if [ -n "${GENERATE_KEY}" ]; then
 		Key-Length: ${GPG_KEYLEN}
 		Subkey-Type: RSA
 		Subkey-Length: ${GPG_KEYLEN}
-		Name-Real: ${DEB_ORIGIN}
+		Name-Real: ${DEB_KEYNAME}
 		Name-Comment: ${DEB_DESCRIPTION}
-		Name-Email: ${DEB_ORIGIN}
+		Name-Email: ${DEB_EMAIL}
 		Expire-Date: 0
 		%no-ask-passphrase
 		%commit
@@ -264,19 +323,19 @@ EOF
 	fi
 	exit 0
 elif [ -n "${GENERATE_KEY}" ] && [ -n "${DEB_SIGNID}" ]; then
-	echo "INFO: Key generation skipped: key for ${DEB_ORIGIN} already found: ${DEB_SIGNID}"
+	echo "INFO: Key generation skipped: key for ${DEB_KEYNAME} already found: ${DEB_SIGNID}"
 fi
-DEB_SIGNID=`gpg ${GPG_OPTS} --list-keys "${DEB_ORIGIN}" 2>/dev/null | grep "^sub" | sed -e 's/^sub.*\/\([0-9A-Za-z]*\).*$/\1/'`
+DEB_SIGNID=`gpg ${GPG_OPTS} --list-keys "${DEB_KEYNAME}" 2>/dev/null | grep "^sub" | sed -e 's/^sub.*\/\([0-9A-Za-z]*\).*$/\1/'`
 
 #############################################################################
 ## Export the GPG key if required
 
 if [ -n "$DEB_SIGNID" ]; then
 	[ ! -d "${KEYPATH}" ] && mkdir -p "${KEYPATH}"
-	if [ ! -f "${KEYPATH}/${DEB_ORIGIN}.gpg.key" ]; then
+	if [ ! -f "${KEYPATH}/${DEB_KEYNAME}.gpg.key" ]; then
 		echo "Exporting key..."
 		# export gpg key in ascii format
-		gpg ${GPG_OPTS} --armor --export ${DEB_ORIGIN} 2>/dev/null > ${KEYPATH}/${DEB_ORIGIN}.gpg.key
+		gpg ${GPG_OPTS} --armor --export ${DEB_KEYNAME} 2>/dev/null > ${KEYPATH}/${DEB_KEYNAME}.gpg.key
 	fi
 elif [ -n "${MANDATORY_SIGN}" ]; then
 	abort "Signing key not available -- package signing disabled, use -g to generate GPG key"
@@ -295,15 +354,24 @@ function add_deb_to_repo
 	fi
 	FN=`basename "${DEBFILE}"`
 	FP="${DEBFILE}"
-	
-	PKG_NAME=`dpkg --info "${FP}" | grep "^ Package: " | sed -e "s/^.*: \(.*\)$/\1/"`
-	PKG_VER=`dpkg --info "${FP}" | grep "^ Version: " | sed -e "s/^.*: \(.*\)$/\1/"`
-	PKG_ARCH=`dpkg --info "${FP}" | grep "^ Architecture: " | sed -e "s/^.*: \(.*\)$/\1/"`
+	dpkg --info "${FP}" 2>&1 >/dev/null
+	if [ $? -ne 0 ]; then
+		abort "File '${FP}' is not a valid debian package"
+	fi
+	PKG_NAME=`dpkg --info "${FP}" 2>/dev/null | grep "^ Package: " | sed -e "s/^.*: \(.*\)$/\1/"`
+	PKG_VER=`dpkg --info "${FP}" 2>/dev/null | grep "^ Version: " | sed -e "s/^.*: \(.*\)$/\1/"`
+	PKG_ARCH=`dpkg --info "${FP}" 2>/dev/null | grep "^ Architecture: " | sed -e "s/^.*: \(.*\)$/\1/"`
 	
 	info "-- ${DEB_DIST}|${FN}: ${PKG_NAME} ${PKG_VER} (${PKG_ARCH})"
 	if [ -n "`reprepro -b ${TARGETDIR}/ listfilter "${DEB_DIST}" "Package  (==${PKG_NAME}), Version (==${PKG_VER})"`" ]; then
-		error "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - skipping..."
-		continue;
+		if [ -n "$REMOVE_IFEXISTS" ]; then
+			warn "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - removing..."
+			reprepro -b ${TARGETDIR}/ remove "${DEB_DIST}" "${PKG_NAME}" 2>&1 > /dev/null
+			[ $? -ne 0 ] && abort "Could not remove package ${PKG_NAME}"
+		else
+			error "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - skipping..."
+			return
+		fi
 	fi
 
 	if [ -n "$DEB_SIGNID" ]; then
@@ -311,7 +379,7 @@ function add_deb_to_repo
 		# Copy to temporary file for signing
 		FP="/tmp/$FN"
 		cp "${DEBFILE}" "${FP}"
-		dpkg-sig -m "${DEB_ORIGIN}" -s builder -g "${GPG_OPTS}" "${FP}" 2>&1 > /dev/null
+		dpkg-sig -m "${DEB_KEYNAME}" -s builder -g "${GPG_OPTS}" "${FP}" 2>&1 > /dev/null
 		[ $? -ne 0 ] && abort "Could not sign package ${FN}"
 	fi
 	# Add the file to the repository
@@ -341,6 +409,7 @@ function archive_debfile
 		info "   Removing incoming file done."
 	fi
 }
+
 #############################################################################
 ## Initialize/check all distributions
 for DEB_DIST in ${DEB_DISTRIBS}; do
@@ -364,27 +433,47 @@ EOF
 	reprepro -b "${TARGETDIR}" check "${DEB_DIST}"
 done
 
-#############################################################################
-## Process the distribution specific packages
-for DEB_DIST in $DEB_DISTRIBS; do
+
+if [ -n "$DISTSEL" ]; then
+	#########################################################################
+	## Process the file provided on the commandline
+	info "Processing files provided on commandline"
+	if [ "$DISTSEL" == "all" ]; then
+		for DEB_DIST in $DEB_DISTRIBS; do
+			add_deb_to_repo "${DEB_DIST}" "$1"
+		done
+	else
+		while [ -n "$1" ]; do
+			add_deb_to_repo "${DISTSEL}" "$1"
+		done
+	fi
+else
+	#########################################################################
 	# Get the debian files from the incoming directory.
-	# The "all" directory and the incoming directory itself are used for packages suitable for all distributions
-	# The subdirectory with the distribution name is used for packages only suitable for this specific distribution.
-	ls ${INCOMINGDIR}/${DEB_DIST}/*.deb 2>/dev/null | while read DEBFILE; do
-		add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
-		archive_debfile "${DEB_DIST}" "${DEBFILE}"
-	done
-done
-
-#############################################################################
-## Process the "all" distributions packages
-ls ${INCOMINGDIR}/*.deb ${INCOMINGDIR}/all/*.deb 2>/dev/null | while read DEBFILE; do
+	# The "all" directory and the incoming directory itself are used for
+	# packages suitable for all distributions.
+	# The subdirectory with the distribution name is used for packages
+	# only suitable for this specific distribution.
+	info "Processing incoming directories"
+	#########################################################################
+	## Process the distribution specific packages
 	for DEB_DIST in $DEB_DISTRIBS; do
-		add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+		ls ${INCOMINGDIR}/${DEB_DIST}/*.deb 2>/dev/null | while read DEBFILE; do
+			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+			archive_debfile "${DEB_DIST}" "${DEBFILE}"
+		done
 	done
-	archive_debfile "" "${DEBFILE}"
-done
 
+	#########################################################################
+	## Process the "all" distributions packages
+	ls ${INCOMINGDIR}/*.deb ${INCOMINGDIR}/all/*.deb 2>/dev/null | while read DEBFILE; do
+		for DEB_DIST in $DEB_DISTRIBS; do
+			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+		done
+		archive_debfile "" "${DEBFILE}"
+	done
+fi
+	
 #############################################################################
 ## Cleanup
 info "Cleaning up repository..."

@@ -22,14 +22,15 @@ $ sudo apt-get install dpkg-sig reprepro gnupg
 $ ./packageserver.sh --generategpg
 $ 
 ```
-Now make sure your `TARGETDIR` is server by a webserver.
+Now make sure your `TARGETDIR` is served by a webserver.
 
-To add packages, put them in your incoming directory, and run the `packageserver.sh` script again. They should be added automatically. You can also run:
+To add packages, put them in your incoming directory, and run the `packageserver.sh` script again without any packages. They should be added automatically.
+
+If you manually want to specify the files on the commandline, you can do this with the following command:
 ```
 $ ./packageserver.sh precise /path/to/mypackage-1.0.deb
 ```
-
-This should sign the package and import it in your repository.
+Where `precise` is the distribution, or if you want to add to all distributions configured, specify `all`. This should sign the package and import it in your repository.
 
 ## Getting started
 
@@ -128,11 +129,14 @@ This means everything went fine! The directories were created, the distribution 
 
 ## Importing packages
 
+
 ### Incoming directories
 
 When running with no distribution or files specified, all `.deb` files in your in incoming directory are processed and added to *all* distributions specified. Files in the `all` subdirectory will also be added to all distributions.
 
 If you want a .deb file only to be available for one distribution, make a subdirectory in your incoming directory with the name of the distribution, and put it there.
+
+**IMPORTANT NOTE**: If the `ARCHDIR` setting is not empty, your (unsigned) `.deb` files are moved to this directory. If the `ARCHDIR` is empty, the files are **REMOVED**.
 
 
 ### Importing packages on commandline
@@ -149,6 +153,13 @@ $
 
 In this command `precise` is the distribution, followed by multiple `.deb` files.
 
+Files processed this way are left untouched and **not** archived or removed.
+
+
+## Pitfalls/known issues
+
+1. Distributions cannot be removed from the repository
+2. GPG keys cannot have a passphrase at the moment. This is "unsecure".
 
 ## Configuring the web-server
 
@@ -165,3 +176,5 @@ Then you add the apt-source by running something like this:
 ```sudo echo "deb http://<your.package.server/url> <distributionname> main" > /etc/apt/sources.list.d/00-myorganisation.list```
 
 Then run a `sudo apt-get update`, and your repository should be available to your client!
+
+

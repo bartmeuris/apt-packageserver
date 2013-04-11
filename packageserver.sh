@@ -170,7 +170,7 @@ DEB_COMPONENTS="main"
 # Please note that when a sub key is present for the 
 #MANDATORY_SIGN=
 
-info "Loaded custom configuration for \${DEB_ORIGIN}.
+info "Loaded custom configuration for \${DEB_ORIGIN}."
 
 EOF
 }
@@ -246,7 +246,7 @@ if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] |
 	[ -z "${DEB_COMPONENTS}" ] && echo "##     DEB_COMPONENTS configuration not set"
 	echo "##"
 	echo "## You can generate a sample configuration file with the following command:"
-	echo "##     $CMD --defaultconfig"
+	echo "##     $CMD --sampleconfig"
 	echo "## Save the output of this command this configuration file as one of these:"
 	echo "##     /etc/default/packageserver"
 	echo "##     ${HOME}/.packageserver"
@@ -255,6 +255,7 @@ if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] |
 	echo "## You can also specify a specific configuration file like this:"
 	echo "##    $CMD --config <alternative configfile>"
 	echo "##"
+	echo "## Run '$CMD --help' for basic usage"
 	echo "#############################################################################"
 	exit 1
 fi
@@ -278,6 +279,7 @@ done
 INSTPKG=
 [ -z `which dpkg-sig` ] && INSTPKG="$INSTPKG dpkg-sig"
 [ -z `which reprepro` ] && INSTPKG="$INSTPKG reprepro"
+[ -z `which gpg`      ] && INSTPKG="$INSTPKG gnupg"
 
 if [ -n "${INSTPKG}" ]; then
 	abort "The following required packages don't seem to be installed: ${INSTPKG}"

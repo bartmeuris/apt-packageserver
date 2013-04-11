@@ -11,10 +11,7 @@
 # http://davehall.com.au/blog/dave/2010/02/06/howto-setup-private-package-repository-reprepro-nginx
 # http://blog.jonliv.es/2011/04/26/creating-your-own-signed-apt-repository-and-debian-packages/
 #
-# To add the repository: 
-#   wget -q -O - http://<url>/conf/${DEB_KEYNAME}.gpg.key | sudo apt-key add -
-#   sudo echo "deb http://<url>/ precise main" > /etc/apt/sources.list.d/00-intoit.list
-# 
+
 
 #############################################################################
 # Generic settings

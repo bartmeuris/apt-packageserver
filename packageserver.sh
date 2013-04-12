@@ -257,6 +257,16 @@ if [ -z "${DEB_DISTRIBS}" ] || [ -z "${DEB_EMAIL}" ] || [ -z "${DEB_ORIGIN}" ] |
 	exit 1
 fi
 
+
+#############################################################################
+## Try to aquire a lock
+exec 200<$0
+if ! flock -n 200; then
+	error "Another $CMD instance is still running"
+	exit 1
+fi
+
+
 if [ ! -d "$TARGETDIR" ]; then
 	mkdir -p "$TARGETDIR/" || abort "Could not create target directory '${TARGETDIR}'!"
 fi
@@ -354,7 +364,18 @@ function add_deb_to_repo
 {
 	add_deb_to_repo_status=
 	DEB_DIST="$1"
-	DEBFILE="$2"
+	DEB_COMPONENT="$2"
+	DEBFILE="$3"
+	if [ "${DEB_COMPONENT}" == "all" ]; then
+		COMPONENT_PARAM=""
+	elif [[ "$DEB_COMPONENTS" == *"$DEB_COMPONENT"* ]]; then
+		COMPONENT_PARAM="-C ${DEB_COMPONENT}"
+	else
+		error "Unknown repository component: ${DEB_COMPONENT}"
+		add_deb_to_repo_status=1
+		return
+	fi
+	
 	if [ ! -f "$DEBFILE" ]; then
 		warn "Attempting to add non-existant $DEBFILE - ignoring"
 		add_deb_to_repo_status=0
@@ -378,18 +399,18 @@ function add_deb_to_repo
 	PKG_ARCH=`dpkg --info "${FP}" 2>/dev/null | grep "^ Architecture: " | sed -e "s/^.*: \(.*\)$/\1/"`
 	
 	info "-- ${DEB_DIST}|${FN}: ${PKG_NAME} ${PKG_VER} (${PKG_ARCH})"
-	if [ -n "`reprepro -b ${TARGETDIR}/ listfilter "${DEB_DIST}" "Package  (==${PKG_NAME}), Version (==${PKG_VER})"`" ]; then
+	if [ -n "`reprepro -b ${TARGETDIR}/ ${COMPONENT_PARAM} listfilter "${DEB_DIST}" "Package  (==${PKG_NAME}), Version (==${PKG_VER})"`" ]; then
 		if [ -n "$REMOVE_IFEXISTS" ]; then
 			warn "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - removing..."
-			reprepro -b ${TARGETDIR}/ remove "${DEB_DIST}" "${PKG_NAME}" 2>&1 > /dev/null
+			reprepro -b ${TARGETDIR}/ ${COMPONENT_PARAM} remove "${DEB_DIST}" "${PKG_NAME}" 2>&1 > /dev/null
 			if [ $? -ne 0 ]; then
 				error "Could not remove package ${PKG_NAME}"
-				add_deb_to_repo_status=3
+				add_deb_to_repo_status=2
 				return
 			fi
 		else
-			error "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - skipping..."
-			add_deb_to_repo_status=2
+			warn "   ${PKG_NAME} Version ${PKG_VER} already exists for ${DEB_DIST} - skipping..."
+			add_deb_to_repo_status=3
 			return
 		fi
 	fi
@@ -408,7 +429,7 @@ function add_deb_to_repo
 	fi
 	# Add the file to the repository
 	info "   Adding..."
-	reprepro -b ${TARGETDIR} includedeb "${DEB_DIST}" "${FP}" 2>&1 > /dev/null
+	reprepro -b ${TARGETDIR} ${COMPONENT_PARAM} includedeb "${DEB_DIST}" "${FP}" 2>&1 > /dev/null
 	if [ $? -ne 0 ]; then
 		error "   Could not add package ${FN} to ${DEB_DIST} distribution!"
 		add_deb_to_repo_status=3
@@ -423,12 +444,13 @@ function add_deb_to_repo
 function archive_debfile
 {
 	DEB_DIST="$1"
-	DEBFILE="$2"
+	DEB_COMPONENT="$2"
+	DEBFILE="$3"
 	if [ -n "${ARCHDIR}" ]; then
 		# Move the file to the archive dir
 		info "   Archiving incoming file '${DEBFILE}'..."
-		[ ! -d "${ARCHDIR}/${DEB_DIST}" ] && mkdir -p "${ARCHDIR}/${DEB_DIST}"
-		mv "${DEBFILE}" "${ARCHDIR}/${DEB_DIST}" || abort "Could not move ${DEBFILE} to ${ARCHDIR}/${DEB_DIST}"
+		[ ! -d "${ARCHDIR}/${DEB_DIST}/DEB_COMPONENT/" ] && mkdir -p "${ARCHDIR}/${DEB_DIST}/DEB_COMPONENT/"
+		mv "${DEBFILE}" "${ARCHDIR}/${DEB_DIST}/DEB_COMPONENT/" || abort "Could not move ${DEBFILE} to ${ARCHDIR}/${DEB_DIST}/DEB_COMPONENT/"
 		info "   Archiving incoming file done."
 	elif [ -w "${DEBFILE}" ]; then
 		info "   Removing incoming file '${DEBFILE}'..."
@@ -488,34 +510,61 @@ else
 	#########################################################################
 	## Process the distribution specific packages
 	for DEB_DIST in $DEB_DISTRIBS; do
-		ls ${INCOMINGDIR}/${DEB_DIST}/*.deb 2>/dev/null | while read DEBFILE; do
-			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+		for DEB_COMPONENT in $DEB_COMPONENTS; do
+			ls ${INCOMINGDIR}/${DEB_DIST}/${DEB_COMPONENT}/*.deb ${INCOMINGDIR}/${DEB_COMPONENT}/${DEB_DIST}/*.deb 2>/dev/null | sort | while read DEBFILE; do
+				add_deb_to_repo "${DEB_DIST}" "${DEB_COMPONENT}" "${DEBFILE}"
+				if [ -n "$add_deb_to_repo_status" ]; then
+					warn "   Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+					RETVAL=$add_deb_to_repo_status
+				else
+					archive_debfile "${DEB_DIST}" "${DEB_COMPONENT}" "${DEBFILE}"
+				fi
+			done
+		done
+
+		ls ${INCOMINGDIR}/${DEB_DIST}/*.deb ${INCOMINGDIR}/${DEB_DIST}/all/*.deb 2>/dev/null | sort | while read DEBFILE; do
+			add_deb_to_repo "${DEB_DIST}" "all" "${DEBFILE}"
 			if [ -n "$add_deb_to_repo_status" ]; then
-				warn "Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+				warn "   Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
 				RETVAL=$add_deb_to_repo_status
 			else
-				archive_debfile "${DEB_DIST}" "${DEBFILE}"
+				archive_debfile "${DEB_DIST}" "all" "${DEBFILE}"
 			fi
 		done
 	done
 
 	#########################################################################
 	## Process the "all" distributions packages
-	ls ${INCOMINGDIR}/*.deb ${INCOMINGDIR}/all/*.deb 2>/dev/null | while read DEBFILE; do
+	for DEB_COMPONENT in $DEB_COMPONENTS; do
+		ls ${INCOMINGDIR}/${DEB_COMPONENT}/*.deb ${INCOMINGDIR}/${DEB_COMPONENT}/all/*.deb ${INCOMINGDIR}/all/${DEB_COMPONENT}/*.deb 2>/dev/null | sort | while read DEBFILE; do
+			LERR=
+			for DEB_DIST in $DEB_DISTRIBS; do
+				add_deb_to_repo "${DEB_DIST}" "${DEB_COMPONENT}" "${DEBFILE}"
+				if [ -n "$add_deb_to_repo_status" ]; then
+					LERR=$add_deb_to_repo_status
+				fi
+			done
+			if [ -n "$LERR" ]; then
+				warn "   Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+				RETVAL=$LERR
+			else
+				archive_debfile "all" "${DEB_COMPONENT}" "${DEBFILE}"
+			fi
+		done
+	done
+	ls ${INCOMINGDIR}/*.deb ${INCOMINGDIR}/all/*.deb ${INCOMINGDIR}/all/all/*.deb 2>/dev/null | sort | while read DEBFILE; do
 		LERR=
 		for DEB_DIST in $DEB_DISTRIBS; do
-			add_deb_to_repo "${DEB_DIST}" "${DEBFILE}"
+			add_deb_to_repo "${DEB_DIST}" "all" "${DEBFILE}"
 			if [ -n "$add_deb_to_repo_status" ]; then
 				LERR=$add_deb_to_repo_status
-			else
-				archive_debfile "${DEB_DIST}" "${DEBFILE}"
 			fi
 		done
 		if [ -n "$LERR" ]; then
-			warn "Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
+			warn "   Problem occured while processing ${DEB_DIST} -> ${DEBFILE} - skipping archiving"
 			RETVAL=$LERR
 		else
-			archive_debfile "" "${DEBFILE}"
+			archive_debfile "all" "all" "${DEBFILE}"
 		fi
 	done
 fi

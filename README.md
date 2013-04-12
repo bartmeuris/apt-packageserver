@@ -27,7 +27,7 @@ sudo apt-get install dpkg-sig reprepro gnupg
 # Generate the initial GPG key
 ./packageserver.sh --generategpg
 ```
-Now make sure your `TARGETDIR` is served by a webserver.
+Then make sure your `TARGETDIR` is served by a webserver.
 
 To add packages, put them in your incoming directory, and run:
 ```
@@ -42,6 +42,8 @@ $ ./packageserver.sh precise /path/to/mypackage-1.0.deb
 Where `precise` is the distribution, or if you want to add to all distributions configured, specify `all`.
 
 When importing a package, it is automatically signed and added to the repository.
+
+If any problems should occur, you should get enough information from the error messages to explain what's going wrong and how to fix it.
 
 ## Getting started
 
@@ -140,15 +142,24 @@ This means everything went fine! The directories were created, the distribution 
 
 ## Importing packages
 
-
 ### Incoming directories
 
-When running with no distribution or files specified, all `.deb` files in your in incoming directory are processed and added to *all* distributions specified. Files in the `all` subdirectory will also be added to all distributions.
+When configured correctly and you run the script without any parameters, all files in the incoming directories are processed. Files that are still in use (checked with `lsof`) are skipped to prevent processing files that are still being uploaded.
 
-If you want a .deb file only to be available for one distribution, make a subdirectory in your incoming directory with the name of the distribution, and put it there.
+The incoming directory can have multiple subdirectories, which determine where the package that is dropped in it ends up in your repository, and in which component. The recognized structure is as following:
 
-**IMPORTANT NOTE**: If the `ARCHDIR` setting is not empty, your (unsigned) `.deb` files are moved to this directory. If the `ARCHDIR` is empty, the files are **REMOVED**.
+ * `<INCOMING>/<DISTRIBUTION>/<COMPONENT>/*.deb` and `<INCOMING>/<COMPONENT>/<DISTRIBUTION>/*.deb`
+   -> end up in component `COMPONENT` of distribution `DISTRIBUTION`
+ * `<INCOMING>/*.deb`, `<INCOMING>/all/*.deb` and `<INCOMING>/all/all/*.deb`
+   -> end up in all distributions, and all components.
+ * `<INCOMING>/<DISTRIBUTION>/*.deb` and `<INCOMING>/<DISTRIBUTION>/all/*.deb`
+   -> end up in all components of distribution `DISTRIBUTION`
+ * `<INCOMING>/<COMPONENT>/*.deb` and `<INCOMING>/<COMPONENT>/all/*.deb`
+   -> end up in component `COMPONENT` of all distributions
+ 
+The `COMPONENT` is the part you specify after the URL in the sources.list files (e.g. "*main*").
 
+**IMPORTANT NOTE**: If the `ARCHDIR` setting is not empty, your processed (unsigned) `.deb` files are moved to this directory. If the `ARCHDIR` is empty, the files are **REMOVED**.
 
 ### Importing packages on commandline
 

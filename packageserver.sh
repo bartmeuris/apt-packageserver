@@ -262,8 +262,8 @@ fi
 ## Try to aquire a lock
 exec 200<$0
 if ! flock -n 200; then
-	error "Another $CMD instance is still running"
-	exit 1
+	warn "Another $CMD instance is still running, exiting..."
+	exit 0
 fi
 
 

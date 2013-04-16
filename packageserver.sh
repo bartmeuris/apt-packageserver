@@ -450,7 +450,7 @@ function archive_debfile
 		# Move the file to the archive dir
 		info "   Archiving incoming file '${DEBFILE}'..."
 		[ ! -d "${ARCHDIR}/${DEB_DIST}/${DEB_COMPONENT}/" ] && mkdir -p "${ARCHDIR}/${DEB_DIST}/${DEB_COMPONENT}/"
-		mv "${DEBFILE}" "${ARCHDIR}/${DEB_DIST}/DEB_COMPONENT/" || abort "Could not move ${DEBFILE} to ${ARCHDIR}/${DEB_DIST}/${DEB_COMPONENT}/"
+		mv "${DEBFILE}" "${ARCHDIR}/${DEB_DIST}/${DEB_COMPONENT}/" || abort "Could not move ${DEBFILE} to ${ARCHDIR}/${DEB_DIST}/${DEB_COMPONENT}/"
 		info "   Archiving incoming file done."
 	elif [ -w "${DEBFILE}" ]; then
 		info "   Removing incoming file '${DEBFILE}'..."
